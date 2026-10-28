@@ -1,5 +1,4 @@
 import SteamUser from "steam-user";
-import SteamTotp from "steam-totp";
 import SteamCommunity from "steamcommunity";
 import TradeOfferManager from "steam-tradeoffer-manager";
 import { LoginSession, EAuthTokenPlatformType } from "steam-session";
@@ -7,9 +6,7 @@ import axios from "axios";
 import { HttpError } from "./security.ts";
 import { getProxyAgent, proxyOptions, axiosProxy } from "./proxy.ts";
 import { logEvent } from "./events.ts";
-
-const CONFIRMATION_TYPE_TRADE = 2;
-const CONFIRMATION_TYPE_MARKET = 3;
+import { authCode, confirmationKey } from "./time.ts";
 
 export type SteamSession = {
   uid: string;
@@ -26,8 +23,9 @@ export type SteamSession = {
   automation: boolean;
   connectedAt: number;
   lastError?: string;
-  // Offers this app created; their mobile confirmations are approved automatically
-  ourOfferIds: Set<string>;
+  // Offers this app created (offer id -> partner SteamID); their mobile
+  // confirmations are approved automatically if the partner still matches
+  ourOffers: Map<string, string>;
 };
 
 // Keyed by `${uid}:${steamId}` so one site user can never use another user's Steam session
@@ -44,6 +42,10 @@ export function requireSession(uid: string, steamId: string) {
     throw new HttpError(409, "Аккаунт не подключён. Нажмите «Войти» на карточке.", "NOT_CONNECTED");
   }
   return session;
+}
+
+export function allSessions() {
+  return [...steamSessions.values()];
 }
 
 export function listSessions(uid: string) {
@@ -89,7 +91,7 @@ export async function obtainRefreshToken(accountName: string, password: string, 
     login.startWithCredentials({
       accountName,
       password,
-      steamGuardCode: sharedSecret ? SteamTotp.getAuthCode(sharedSecret) : undefined
+      steamGuardCode: sharedSecret ? authCode(sharedSecret).code : undefined
     }).then((result) => {
       if (result.actionRequired) {
         const types = (result.validActions || []).map((a: any) => a.type).join(", ");
@@ -129,7 +131,7 @@ function createSteamSession(uid: string, accountName: string, proxy?: string): S
     proxy,
     automation: false,
     connectedAt: Date.now(),
-    ourOfferIds: new Set()
+    ourOffers: new Map()
   };
 
   // Permanent listeners: an 'error' event without a listener would crash the whole server
@@ -383,66 +385,18 @@ function requireIdentitySecret(session: SteamSession) {
 }
 
 export async function listConfirmations(session: SteamSession) {
-  const identitySecret = requireIdentitySecret(session);
-  const time = SteamTotp.time();
-  const key = SteamTotp.getConfirmationKey(identitySecret, time, "conf");
+  const { time, key } = confirmationKey(requireIdentitySecret(session), "conf");
   const confs: any[] = await promisify((cb) => session.community.getConfirmations(time, key, cb));
   return confs;
 }
 
-async function respondToConfirmation(session: SteamSession, conf: any, accept: boolean) {
-  const identitySecret = requireIdentitySecret(session);
-  const time = SteamTotp.time();
-  const key = SteamTotp.getConfirmationKey(identitySecret, time, accept ? "allow" : "cancel");
+export async function respondToConfirmation(session: SteamSession, conf: any, accept: boolean) {
+  const { time, key } = confirmationKey(requireIdentitySecret(session), accept ? "allow" : "cancel");
   await promisify((cb) => conf.respond(time, key, accept, cb));
 }
 
-// Accepts market listings and trades created by this app; everything else is left for the user
-export async function confirmAutomatic(session: SteamSession) {
-  const confs = await listConfirmations(session);
-  let accepted = 0;
-  for (const conf of confs) {
-    const isMarket = conf.type === CONFIRMATION_TYPE_MARKET;
-    const isOurTrade = conf.type === CONFIRMATION_TYPE_TRADE && session.ourOfferIds.has(String(conf.creator));
-    if (!isMarket && !isOurTrade) continue;
-    try {
-      await respondToConfirmation(session, conf, true);
-      accepted++;
-      logEvent(session.uid, {
-        level: "success",
-        steamId: session.steamId,
-        accountName: session.accountName,
-        type: isMarket ? "market-confirm" : "trade-confirm",
-        message: `Подтверждено: ${conf.title}`
-      });
-    } catch (err: any) {
-      logEvent(session.uid, {
-        level: "error",
-        steamId: session.steamId,
-        accountName: session.accountName,
-        type: "confirm-error",
-        message: `${conf.title}: ${err.message}`
-      });
-    }
-  }
-  return { total: confs.length, accepted };
-}
-
-export async function respondToConfirmations(session: SteamSession, ids: string[], accept: boolean) {
-  const confs = await listConfirmations(session);
-  let done = 0;
-  for (const conf of confs.filter((c) => ids.includes(String(c.id)))) {
-    await respondToConfirmation(session, conf, accept);
-    done++;
-    logEvent(session.uid, {
-      level: accept ? "success" : "warning",
-      steamId: session.steamId,
-      accountName: session.accountName,
-      type: accept ? "confirm" : "confirm-cancel",
-      message: `${accept ? "Подтверждено" : "Отклонено"}: ${conf.title}`
-    });
-  }
-  return { done };
+export function getOffer(session: SteamSession, offerId: string) {
+  return promisify<any>((cb) => session.manager.getOffer(offerId, cb));
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +458,7 @@ export async function transferItems(from: SteamSession, to: SteamSession, appId:
   offer.addMyItems(items);
   offer.setMessage("SteamFarmer: перенос предметов");
   const status: string = await promisify((cb) => offer.send(cb));
-  from.ourOfferIds.add(String(offer.id));
+  from.ourOffers.set(String(offer.id), to.steamId);
 
   if (status === "pending") {
     await promisify((cb) => from.community.acceptConfirmationForObject(from.identitySecret!, offer.id, cb));
@@ -555,7 +509,7 @@ export async function addFreeLicenses(session: SteamSession, appIds: number[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Automation loop: every 30s confirm market listings / our own trades and accept safe incoming trades
+// Automation loop: every 30s accept safe incoming trades (confirmations are handled by guard.ts)
 // ---------------------------------------------------------------------------
 
 const AUTOMATION_INTERVAL_MS = 30_000;
@@ -564,7 +518,6 @@ async function runAutomationTick() {
   for (const session of steamSessions.values()) {
     if (!session.automation || !session.loggedIn) continue;
     try {
-      if (session.identitySecret) await confirmAutomatic(session);
       await acceptSafeOffers(session);
       session.lastError = undefined;
     } catch (err: any) {
@@ -575,4 +528,4 @@ async function runAutomationTick() {
 
 setInterval(() => {
   runAutomationTick().catch((err) => console.error("[Automation]", err.message));
-}, AUTOMATION_INTERVAL_MS);
+}, AUTOMATION_INTERVAL_MS).unref();

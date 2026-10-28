@@ -1,101 +1,19 @@
 import React, { useState } from 'react';
-import { CheckCheck, ShieldCheck, RefreshCw, Inbox, Boxes, X, Check } from 'lucide-react';
+import { CheckCheck, ShieldCheck, RefreshCw, Inbox, Boxes, X } from 'lucide-react';
 import { apiPost } from '../lib/api';
 import { addLog } from '../lib/logs';
 import { useData } from '../lib/data';
 import { useMask } from '../lib/prefs';
 import { setAutomation } from '../lib/accounts';
 import { sessionState, type SteamAccount } from '../lib/types';
-import { Avatar, Modal, PageHeader, SessionBadge, Toggle } from '../components/ui';
+import { Avatar, PageHeader, SessionBadge, Toggle } from '../components/ui';
 import { GAMES } from '../lib/games';
 
-type Confirmation = { id: string; type: number; title: string; sending: string; receiving: string; time: string; icon: string; ours: boolean };
-
-function ConfirmationsModal({ account, onClose }: { account: SteamAccount; onClose: () => void }) {
-  const [items, setItems] = useState<Confirmation[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-
-  const load = async () => {
-    setError(null);
-    try {
-      const data = await apiPost('/api/steam/confirmations', { steamId: account.steamId });
-      setItems(data.confirmations);
-      setSelected(new Set());
-    } catch (err: any) {
-      setError(err.message);
-      setItems([]);
-    }
-  };
-
-  React.useEffect(() => { load(); }, []);
-
-  const respond = async (accept: boolean) => {
-    setBusy(true);
-    try {
-      await apiPost('/api/steam/confirmations/respond', { steamId: account.steamId, ids: [...selected], accept });
-      await load();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="Мобильные подтверждения"
-      subtitle={account.accountName}
-      onClose={onClose}
-      footer={
-        <>
-          <button onClick={load} className="btn-ghost mr-auto"><RefreshCw size={14} /> Обновить</button>
-          <button onClick={() => respond(false)} disabled={!selected.size || busy} className="btn-danger"><X size={14} /> Отклонить</button>
-          <button onClick={() => respond(true)} disabled={!selected.size || busy} className="btn-primary"><Check size={14} /> Подтвердить ({selected.size})</button>
-        </>
-      }
-    >
-      {error && <div className="p-3 mb-4 rounded-xl bg-bad/10 border border-bad/30 text-bad text-sm">{error}</div>}
-      {items === null ? (
-        <div className="py-10 text-center text-muted"><RefreshCw className="animate-spin inline mr-2" size={16} />Загрузка…</div>
-      ) : items.length === 0 ? (
-        <div className="py-10 text-center text-muted">Подтверждений нет</div>
-      ) : (
-        <div className="space-y-2">
-          {items.map((c) => (
-            <label key={c.id} className={`flex items-start gap-3 card-inset p-3 cursor-pointer ${selected.has(c.id) ? 'border-accent/60' : ''}`}>
-              <input
-                type="checkbox"
-                className="accent-[#E8A33D] mt-1"
-                checked={selected.has(c.id)}
-                onChange={() => setSelected((s) => {
-                  const n = new Set(s);
-                  n.has(c.id) ? n.delete(c.id) : n.add(c.id);
-                  return n;
-                })}
-              />
-              {c.icon && <img src={c.icon} alt="" className="w-9 h-9 rounded-lg" />}
-              <div className="min-w-0 text-sm">
-                <div className="font-semibold text-ink">{c.title}</div>
-                {c.sending && <div className="text-xs text-copper">Отдаёте: {c.sending}</div>}
-                {c.receiving && <div className="text-xs text-ok">Получаете: {c.receiving}</div>}
-                <div className="text-[11px] text-faint">{new Date(c.time).toLocaleString()}{c.ours ? ' · создано приложением' : ''}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-export function AutomationView() {
+export function AutomationView({ onOpenGuard }: { onOpenGuard: () => void }) {
   const { accounts, sessions, refreshSessions } = useData();
   const mask = useMask();
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
-  const [confirmFor, setConfirmFor] = useState<SteamAccount | null>(null);
 
   // Collect items
   const [target, setTarget] = useState('');
@@ -119,7 +37,7 @@ export function AutomationView() {
     setResult(lines.join('\n'));
   };
 
-  const confirmMarket = (a: SteamAccount) => apiPost('/api/steam/confirmations/auto', { steamId: a.steamId })
+  const confirmMarket = (a: SteamAccount) => apiPost('/api/guard/auto', { steamId: a.steamId })
     .then((r) => `подтверждено ${r.accepted} из ${r.total}`);
   const acceptSafe = (a: SteamAccount) => apiPost('/api/steam/offers/accept-safe', { steamId: a.steamId })
     .then((r) => `принято ${r.accepted}, пропущено ${r.skipped} (где нужно что-то отдать)`);
@@ -168,6 +86,7 @@ export function AutomationView() {
           С включённым тумблером приложение раз в 30 секунд <b className="text-ink">подтверждает лоты маркета</b> и трейды, созданные этим приложением,
           и <b className="text-ink">принимает входящие трейды, где вы ничего не отдаёте</b>. Остальные трейды не трогает.
           Работает, пока приложение запущено (в том числе свёрнутым в трей) и аккаунт подключён; после перезапуска сессии восстанавливаются сами.
+          Остальные подтверждения ждут вас в разделе «Steam Guard».
         </div>
       </div>
 
@@ -216,7 +135,7 @@ export function AutomationView() {
                     <div className="flex justify-end gap-1.5">
                       <button disabled={!live || !!busy} onClick={() => runFor('Маркет', [a], confirmMarket)} className="btn-ghost btn-sm" title="Подтвердить маркет"><CheckCheck size={14} /></button>
                       <button disabled={!live || !!busy} onClick={() => runFor('Трейды', [a], acceptSafe)} className="btn-ghost btn-sm" title="Принять безопасные трейды"><Inbox size={14} /></button>
-                      <button disabled={!live} onClick={() => setConfirmFor(a)} className="btn-secondary btn-sm"><ShieldCheck size={14} /> Подтверждения</button>
+                      <button onClick={onOpenGuard} className="btn-secondary btn-sm"><ShieldCheck size={14} /> Подтверждения</button>
                     </div>
                   </td>
                 </tr>
@@ -276,7 +195,6 @@ export function AutomationView() {
         {collectLog.length > 0 && <pre className="card-inset p-3 mt-4 text-xs text-muted whitespace-pre-wrap font-mono">{collectLog.join('\n')}</pre>}
       </div>
 
-      {confirmFor && <ConfirmationsModal account={confirmFor} onClose={() => setConfirmFor(null)} />}
     </>
   );
 }

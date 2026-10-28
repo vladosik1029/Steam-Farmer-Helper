@@ -1,5 +1,4 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import SteamTotp from "steam-totp";
 import axios from "axios";
 import {
   HttpError, seal, unseal, tokenExpiry,
@@ -8,9 +7,11 @@ import {
 import { normalizeProxy, getProxyAgent } from "./core/proxy.ts";
 import {
   obtainRefreshToken, connectSession, disconnectSession, getSession, requireSession, listSessions,
-  fetchSteamWallet, fetchProfile, fetchSteamInventory, listConfirmations, confirmAutomatic,
-  respondToConfirmations, acceptSafeOffers, transferItems, addFreeLicenses
+  fetchSteamWallet, fetchProfile, fetchSteamInventory, acceptSafeOffers, transferItems, addFreeLicenses
 } from "./core/steam.ts";
+import { guardState, pollAccount, respondGuard } from "./core/guard.ts";
+import { authCode, timeOffset } from "./core/time.ts";
+import { logEvent } from "./core/events.ts";
 import { getPrices } from "./core/prices.ts";
 import { findFreePromotions } from "./core/games.ts";
 import * as store from "./store.ts";
@@ -114,7 +115,7 @@ const api: Record<string, Handler> = {
   "steam/code": (body) => {
     const secrets = unseal(body.sealed, uid);
     if (!secrets.sharedSecret) throw new HttpError(400, "No shared_secret for this account");
-    return { code: SteamTotp.getAuthCode(secrets.sharedSecret), validFor: 30 - (SteamTotp.time() % 30) };
+    return authCode(secrets.sharedSecret);
   },
 
   "steam/profile": (body) => {
@@ -144,31 +145,6 @@ const api: Record<string, Handler> = {
 
   // ---------------------------------------------------------------- automation & trades
 
-  "steam/confirmations": async (body) => {
-    const session = requireSession(uid, requireSteamId(body.steamId));
-    const confs = await listConfirmations(session);
-    return {
-      confirmations: confs.map((c: any) => ({
-        id: String(c.id),
-        type: c.type,
-        title: c.title,
-        sending: c.sending,
-        receiving: c.receiving,
-        time: c.timestamp,
-        icon: c.icon,
-        ours: session.ourOfferIds.has(String(c.creator))
-      }))
-    };
-  },
-
-  "steam/confirmations/respond": (body) => {
-    const session = requireSession(uid, requireSteamId(body.steamId));
-    return respondToConfirmations(session, requireIdList(body.ids, 200), body.accept !== false);
-  },
-
-  // One-shot run of what the automation toggle does in the background
-  "steam/confirmations/auto": (body) => confirmAutomatic(requireSession(uid, requireSteamId(body.steamId))),
-
   "steam/offers/accept-safe": (body) => acceptSafeOffers(requireSession(uid, requireSteamId(body.steamId))),
 
   "steam/transfer": (body) => {
@@ -177,6 +153,53 @@ const api: Record<string, Handler> = {
     const appId = Number(body.appId) || 730;
     const contextId = Number(body.contextId) || (appId === 753 ? 6 : 2);
     return transferItems(from, to, appId, contextId, requireIdList(body.assetIds, 500));
+  },
+
+  // ---------------------------------------------------------------- steam guard
+
+  // Confirmations of every connected account, kept fresh by the background poll
+  "guard/state": () => ({ accounts: guardState(), time: timeOffset() }),
+
+  "guard/refresh": async (body) => {
+    const session = requireSession(uid, requireSteamId(body.steamId));
+    return pollAccount(session, false);
+  },
+
+  // One-shot run of the automation rules: market listings and trades created by the app
+  "guard/auto": (body) => pollAccount(requireSession(uid, requireSteamId(body.steamId)), true),
+
+  "guard/respond": (body) => respondGuard(
+    requireSession(uid, requireSteamId(body.steamId)),
+    requireIdList(body.ids, 200),
+    body.accept !== false,
+    !!body.confirmDanger
+  ),
+
+  // Current codes for many accounts at once (the Guard page list)
+  "guard/codes": (body) => {
+    const list = Array.isArray(body.accounts) ? body.accounts.slice(0, 1000) : [];
+    const codes: { id: string; code: string; validFor: number }[] = [];
+    for (const item of list) {
+      try {
+        const secrets = unseal(item.sealed, uid);
+        if (secrets.sharedSecret) codes.push({ id: String(item.id), ...authCode(secrets.sharedSecret) });
+      } catch {
+        // Skip accounts whose blob can't be read; the page shows them without a code
+      }
+    }
+    return { codes };
+  },
+
+  "guard/revocation": (body) => {
+    const secrets = unseal(body.sealed, uid);
+    if (!secrets.revocationCode) throw new HttpError(404, "В maFile нет кода восстановления.");
+    logEvent(uid, {
+      level: "warning",
+      accountName: body.accountName ? String(body.accountName).slice(0, 64) : undefined,
+      type: "revocation-view",
+      message: "Показан код восстановления"
+    });
+    return { code: secrets.revocationCode };
   },
 
   // ---------------------------------------------------------------- games

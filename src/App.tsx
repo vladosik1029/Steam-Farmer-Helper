@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Users, Package, Zap, Gamepad2, ScrollText, Settings, Plus, Play,
-  RefreshCw, Eye, EyeOff, User as UserIcon
+  RefreshCw, Eye, EyeOff, User as UserIcon, ShieldCheck
 } from 'lucide-react';
 import { DataProvider, useData } from './lib/data';
 import { PrefsProvider, usePrefs } from './lib/prefs';
@@ -15,12 +15,15 @@ import { AutomationView } from './views/AutomationView';
 import { GamesView } from './views/GamesView';
 import { LogsView } from './views/LogsView';
 import { SettingsView } from './views/SettingsView';
+import { GuardView } from './views/GuardView';
+import { bridge } from './lib/bridge';
 
-type Tab = 'dashboard' | 'accounts' | 'inventory' | 'automation' | 'games' | 'logs' | 'settings';
+type Tab = 'dashboard' | 'accounts' | 'guard' | 'inventory' | 'automation' | 'games' | 'logs' | 'settings';
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Обзор', icon: <LayoutDashboard size={18} /> },
   { id: 'accounts', label: 'Аккаунты', icon: <Users size={18} /> },
+  { id: 'guard', label: 'Steam Guard', icon: <ShieldCheck size={18} /> },
   { id: 'inventory', label: 'Инвентарь', icon: <Package size={18} /> },
   { id: 'automation', label: 'Автоматизация', icon: <Zap size={18} /> },
   { id: 'games', label: 'Игры', icon: <Gamepad2 size={18} /> },
@@ -40,12 +43,19 @@ function Logo({ size = 36 }: { size?: number }) {
 }
 
 function Shell() {
-  const { accounts, sessions, refreshSessions } = useData();
+  const { accounts, sessions, refreshSessions, guard } = useData();
   const { prefs, setPrefs } = usePrefs();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [showAdd, setShowAdd] = useState(false);
   const [inventoryAccountId, setInventoryAccountId] = useState<string | null>(null);
   const [startAllStatus, setStartAllStatus] = useState<string | null>(null);
+
+  // Notifications and the tray menu open a page directly
+  useEffect(() => bridge().onNavigate((page) => {
+    if (NAV.some((item) => item.id === page)) setTab(page as Tab);
+  }), []);
+
+  const pending = guard.reduce((sum, a) => sum + a.confirmations.length, 0);
 
   const openInventory = (accountId: string) => {
     setInventoryAccountId(accountId);
@@ -88,6 +98,7 @@ function Shell() {
               {item.icon}
               {item.label}
               {item.id === 'accounts' && <span className="ml-auto text-[11px] bg-raised px-2 py-0.5 rounded-full text-muted">{accounts.length}</span>}
+              {item.id === 'guard' && pending > 0 && <span className="ml-auto text-[11px] bg-accent text-accent-ink font-bold px-2 py-0.5 rounded-full">{pending}</span>}
             </div>
           ))}
         </nav>
@@ -127,7 +138,7 @@ function Shell() {
         <nav className="md:hidden flex gap-1 overflow-x-auto px-3 py-2 border-b border-line bg-surface/70">
           {NAV.map((item) => (
             <button key={item.id} onClick={() => setTab(item.id)} className={`nav-item shrink-0 py-1.5 ${tab === item.id ? 'nav-item-active' : ''}`}>
-              {item.icon}<span className="text-xs">{item.label}</span>
+              {item.icon}<span className="text-xs">{item.label}{item.id === 'guard' && pending > 0 ? ` (${pending})` : ''}</span>
             </button>
           ))}
         </nav>
@@ -137,7 +148,8 @@ function Shell() {
             {tab === 'dashboard' && <DashboardView onAddAccount={() => setShowAdd(true)} onOpenInventory={openInventory} />}
             {tab === 'accounts' && <AccountsView onOpenInventory={openInventory} />}
             {tab === 'inventory' && <InventoryView initialAccountId={inventoryAccountId} />}
-            {tab === 'automation' && <AutomationView />}
+            {tab === 'guard' && <GuardView />}
+            {tab === 'automation' && <AutomationView onOpenGuard={() => setTab('guard')} />}
             {tab === 'games' && <GamesView />}
             {tab === 'logs' && <LogsView />}
             {tab === 'settings' && <SettingsView />}
