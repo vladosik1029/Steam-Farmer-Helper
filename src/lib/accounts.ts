@@ -1,36 +1,27 @@
-import { doc, setDoc, deleteField } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { setDoc } from './store';
 import { apiPost } from './api';
 import { addLog } from './logs';
 import type { SteamAccount } from './types';
 
-export function accountRef(account: SteamAccount) {
-  return doc(db, 'users', auth.currentUser!.uid, 'steamAccounts', account.id);
-}
-
-// Every update carries lastCheck: the deployed rules may still be the old
-// "any of these keys changed" version, and lastCheck always changes.
-export async function updateAccount(account: SteamAccount, data: Record<string, unknown>) {
-  await setDoc(accountRef(account), { ...data, lastCheck: new Date().toISOString() }, { merge: true });
+export async function updateAccount(account: SteamAccount, data: Record<string, unknown>, unset: string[] = []) {
+  await setDoc('accounts', account.id, { ...data, lastCheck: new Date().toISOString() }, { merge: true, unset });
 }
 
 type SealResult = { sealed: string; steamId?: string; hasToken: boolean; tokenExpires: number | null };
 
-// Stores the result of /api/accounts/seal and wipes legacy plaintext fields
+// Stores the result of accounts/seal and wipes legacy plaintext fields
 export async function saveSealedSecrets(account: SteamAccount, result: SealResult) {
   const update: Record<string, unknown> = {
     secrets: result.sealed,
     hasToken: result.hasToken,
-    tokenExpires: result.tokenExpires ?? null,
-    password: deleteField(),
-    maFileData: deleteField()
+    tokenExpires: result.tokenExpires ?? null
   };
   if (result.steamId) update.steamId = result.steamId;
-  await updateAccount(account, update);
+  await updateAccount(account, update, ['password', 'maFileData']);
   return result.sealed;
 }
 
-// Legacy accounts keep password + maFile secrets in plain text: encrypt them on the server
+// Accounts imported from old web versions may keep password + maFile secrets in plain text: encrypt them
 // (logging in once with the old password to get a refresh token) and delete the plaintext.
 export async function ensureSealed(account: SteamAccount, onStatus?: (status: string) => void): Promise<string> {
   if (account.secrets) return account.secrets;
@@ -69,8 +60,8 @@ export async function refreshProfile(account: SteamAccount, steamId = account.st
   await updateAccount(account, update);
 }
 
-// Starts a Steam session on the server from the stored refresh token, then stores
-// the real SteamID64, wallet and public profile in Firestore.
+// Starts a Steam session from the stored refresh token, then stores
+// the real SteamID64, wallet and public profile.
 export async function loginSteamAccount(account: SteamAccount, onStatus?: (status: string) => void) {
   const sealed = await ensureSealed(account, onStatus);
 

@@ -1,23 +1,21 @@
 node_modules/
-build/
+out/
+release/
 dist/
 coverage/
 .DS_Store
 *.log
 
-# Secrets: SECRETS_KEY and other local settings
+# Local settings and secrets
 .env*
-!.env.example
 
 # Steam Guard files must never be committed
 *.maFile
 *.mafile
 maFiles/
 
-# Firebase CLI cache
-.firebase/
-
-# Personal Firebase project settings (copy from the *.example files)
+# Old web version: personal Firebase settings and its export
 firebase-applet-config.json
 .firebaserc
 firebase.json
+steamfarmer-export.json

@@ -1,12 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  LayoutDashboard, Users, Package, Zap, Gamepad2, ScrollText, Settings, LogOut, Plus, Play,
-  RefreshCw, Mail, Lock, Eye, EyeOff, ShieldAlert, User as UserIcon
+  LayoutDashboard, Users, Package, Zap, Gamepad2, ScrollText, Settings, Plus, Play,
+  RefreshCw, Eye, EyeOff, User as UserIcon
 } from 'lucide-react';
-import { motion } from 'motion/react';
-import { onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from './lib/firebase';
 import { DataProvider, useData } from './lib/data';
 import { PrefsProvider, usePrefs } from './lib/prefs';
 import { loginSteamAccount } from './lib/accounts';
@@ -43,97 +39,8 @@ function Logo({ size = 36 }: { size?: number }) {
   );
 }
 
-function AuthScreen() {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      if (mode === 'register') await createUserWithEmailAndPassword(auth, email, password);
-      else await signInWithEmailAndPassword(auth, email, password);
-    } catch (err: any) {
-      const map: Record<string, string> = {
-        'auth/email-already-in-use': 'Этот email уже используется.',
-        'auth/invalid-email': 'Неверный формат email.',
-        'auth/operation-not-allowed': 'Вход по почте не включён в Firebase.',
-        'auth/weak-password': 'Пароль слишком слабый (минимум 6 символов).',
-        'auth/user-not-found': 'Пользователь не найден.',
-        'auth/wrong-password': 'Неверный пароль.',
-        'auth/invalid-credential': 'Неверная почта или пароль.'
-      };
-      setError(map[err.code] || `Ошибка: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="relative min-h-full flex items-center justify-center p-4">
-      <Background id="aurora" />
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="relative card p-8 sm:p-10 w-full max-w-md shadow-2xl shadow-black/40">
-        <div className="flex flex-col items-center text-center mb-8">
-          <Logo size={56} />
-          <h1 className="text-3xl font-extrabold text-ink mt-4 tracking-tight">SteamFarmer</h1>
-          <p className="text-sm text-muted mt-1">{mode === 'login' ? 'Вход в панель управления аккаунтами' : 'Создание учётной записи'}</p>
-        </div>
-
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="label">Почта</label>
-            <div className="relative">
-              <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="input w-full pl-9" placeholder="name@mail.ru" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className="label">Пароль</label>
-            <div className="relative">
-              <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input w-full pl-9 pr-10"
-                placeholder="••••••••"
-              />
-              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-faint hover:text-ink">
-                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-          </div>
-
-          {error && (
-            <div className="p-3 rounded-xl bg-bad/10 border border-bad/30 text-bad text-sm flex items-center gap-2">
-              <ShieldAlert size={15} className="shrink-0" /> {error}
-            </div>
-          )}
-
-          <button type="submit" disabled={loading} className="btn-primary w-full py-3 text-base mt-2">
-            {loading ? <RefreshCw className="animate-spin" size={18} /> : mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
-          </button>
-        </form>
-
-        <button
-          onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
-          className="w-full mt-6 text-sm text-muted hover:text-accent transition-colors"
-        >
-          {mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
-        </button>
-      </motion.div>
-    </div>
-  );
-}
-
 function Shell() {
-  const { user, accounts, sessions, refreshSessions } = useData();
+  const { accounts, sessions, refreshSessions } = useData();
   const { prefs, setPrefs } = usePrefs();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [showAdd, setShowAdd] = useState(false);
@@ -187,7 +94,7 @@ function Shell() {
         <div className="m-3 p-3 card-inset flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-accent/15 text-accent flex items-center justify-center"><UserIcon size={14} /></div>
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-ink truncate">{user.email}</div>
+            <div className="text-xs font-semibold text-ink truncate">Локальный профиль</div>
             <div className="text-[11px] text-faint">сессий онлайн: {activeCount}</div>
           </div>
         </div>
@@ -213,7 +120,6 @@ function Shell() {
               {prefs.hideSensitive ? <EyeOff size={16} /> : <Eye size={16} />}
               <span className="hidden lg:inline">{prefs.hideSensitive ? 'Данные скрыты' : 'Скрыть данные'}</span>
             </button>
-            <button onClick={() => signOut(auth)} className="btn-ghost btn-sm hover:text-bad" title="Выйти"><LogOut size={16} /></button>
           </div>
         </header>
 
@@ -245,38 +151,11 @@ function Shell() {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => onAuthStateChanged(auth, (u) => {
-    setUser(u);
-    setLoading(false);
-  }), []);
-
-  // Keep the user profile document fresh
-  useEffect(() => {
-    if (!user) return;
-    setDoc(doc(db, 'users', user.uid), {
-      uid: user.uid,
-      email: user.email,
-      lastActive: serverTimestamp(),
-      createdAt: serverTimestamp()
-    }, { merge: true }).catch((err) => console.warn('Profile sync failed', err));
-  }, [user]);
-
   return (
     <PrefsProvider>
-      {loading ? (
-        <div className="h-full flex items-center justify-center text-muted">
-          <RefreshCw className="animate-spin text-accent mr-3" size={20} /> Загрузка…
-        </div>
-      ) : user ? (
-        <DataProvider user={user}>
-          <Shell />
-        </DataProvider>
-      ) : (
-        <AuthScreen />
-      )}
+      <DataProvider>
+        <Shell />
+      </DataProvider>
     </PrefsProvider>
   );
 }
