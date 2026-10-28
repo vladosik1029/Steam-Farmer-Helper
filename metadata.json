@@ -1,0 +1,6 @@
+{
+  "name": "SteamFarmerHelper",
+  "description": "Comprehensive Steam account manager with Steam Guard support, inventory tracking, and automation tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

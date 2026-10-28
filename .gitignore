@@ -1,0 +1,23 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+
+# Secrets: SECRETS_KEY and other local settings
+.env*
+!.env.example
+
+# Steam Guard files must never be committed
+*.maFile
+*.mafile
+maFiles/
+
+# Firebase CLI cache
+.firebase/
+
+# Personal Firebase project settings (copy from the *.example files)
+firebase-applet-config.json
+.firebaserc
+firebase.json

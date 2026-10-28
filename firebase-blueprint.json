@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "App user profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "SteamAccount": {
+      "title": "Steam Account",
+      "description": "Managed Steam account details",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "steamId": { "type": "string" },
+        "accountName": { "type": "string" },
+        "personaName": { "type": "string" },
+        "avatar": { "type": "string" },
+        "walletBalance": { "type": "string" },
+        "vacBanned": { "type": "boolean" },
+        "maFileData": {
+          "type": "object",
+          "properties": {
+            "shared_secret": { "type": "string" },
+            "identity_secret": { "type": "string" },
+            "revocation_code": { "type": "string" }
+          }
+        },
+        "proxy": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "stale", "error"] },
+        "lastCheck": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "accountName"]
+    },
+    "ActivityLog": {
+      "title": "Activity Log",
+      "description": "Log of actions performed by or for an account",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "steamId": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "details": { "type": "string" }
+      }
+    },
+    "Proxy": {
+      "title": "Proxy Node",
+      "description": "Custom proxy server configuration",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "label": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "dead"] },
+        "createdAt": { "type": "string" },
+        "deleted": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/users/{userId}/steamAccounts/{accountId}": {
+      "schema": "SteamAccount",
+      "description": "Managed Steam accounts for a user"
+    },
+    "/users/{userId}/logs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "Activity logs for a user"
+    },
+    "/users/{userId}/proxies/{proxyId}": {
+      "schema": "Proxy",
+      "description": "Proxy configurations for a user"
+    }
+  }
+}
