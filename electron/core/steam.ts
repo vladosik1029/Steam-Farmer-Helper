@@ -348,7 +348,10 @@ export function fetchSteamInventory(session: SteamSession | undefined, steamId: 
 }
 
 async function loadSteamInventory(session: SteamSession | undefined, steamId: string, appId: number, contextId: number, proxy?: string): Promise<any[]> {
-  if (session && session.loggedIn) {
+  // The session's own client already goes through the account's proxy; another proxy
+  // chosen for this load takes the plain request below, with the session's cookies
+  const sameProxy = (proxy || session?.proxy || "") === (session?.proxy || "");
+  if (session && session.loggedIn && sameProxy) {
     return community(session.proxy, () => new Promise<any[]>((resolve, reject) => {
       // tradableOnly = false: otherwise trade-locked / non-tradable items are silently dropped
       session.community.getUserInventoryContents(steamId, appId, contextId, false, "english", (err: any, inventory: any) => {
@@ -358,12 +361,14 @@ async function loadSteamInventory(session: SteamSession | undefined, steamId: st
     }));
   }
 
-  // Anonymous fallback: Steam rate-limits this heavily, logging in is strongly preferred
+  // Plain request (anonymous, or with the session cookies over another proxy): Steam rate-limits
+  // anonymous loads heavily, logging in is strongly preferred
   const response = await community(proxy, () => axios.get(`https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
       "Accept": "application/json, text/plain, */*",
-      "Referer": `https://steamcommunity.com/profiles/${steamId}/inventory/`
+      "Referer": `https://steamcommunity.com/profiles/${steamId}/inventory/`,
+      ...(session?.loggedIn && session.cookies.length ? { Cookie: session.cookies.map((c) => c.split(";")[0]).join("; ") } : {})
     },
     timeout: 30000,
     validateStatus: (status) => status !== 429,
