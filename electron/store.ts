@@ -1,16 +1,18 @@
 import fs from "fs";
 import path from "path";
 
-// Local replacement for Firestore: accounts, proxies and history in one JSON
+// Local replacement for Firestore: accounts, proxies, saved trade partners and history in one JSON
 // file inside the profile folder. Writes are debounced and atomic (tmp + rename).
 
-export type Collection = "accounts" | "proxies" | "logs";
+export type Collection = "accounts" | "proxies" | "partners" | "logs";
+export type DocCollection = Exclude<Collection, "logs">;
 export type Doc = Record<string, any> & { id: string };
 
 type Data = {
   version: 1;
   accounts: Record<string, Doc>;
   proxies: Record<string, Doc>;
+  partners: Record<string, Doc>;
   logs: Doc[];
 };
 
@@ -19,7 +21,7 @@ const MAX_LOGS = 2000;
 const SAVE_DELAY_MS = 300;
 
 let file = "";
-let data: Data = { version: 1, accounts: {}, proxies: {}, logs: [] };
+let data: Data = { version: 1, accounts: {}, proxies: {}, partners: {}, logs: [] };
 let saveTimer: NodeJS.Timeout | null = null;
 let onChange: (collection: Collection) => void = () => {};
 
@@ -28,7 +30,7 @@ export function openStore(dir: string, changed: (collection: Collection) => void
   onChange = changed;
   if (fs.existsSync(file)) {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    data = { version: 1, accounts: parsed.accounts || {}, proxies: parsed.proxies || {}, logs: parsed.logs || [] };
+    data = { version: 1, accounts: parsed.accounts || {}, proxies: parsed.proxies || {}, partners: parsed.partners || {}, logs: parsed.logs || [] };
   }
 }
 
@@ -52,13 +54,13 @@ export function listDocs(collection: Collection): Doc[] {
   return Object.values(data[collection]);
 }
 
-export function getDoc(collection: "accounts" | "proxies", id: string): Doc | undefined {
+export function getDoc(collection: DocCollection, id: string): Doc | undefined {
   return data[collection][id];
 }
 
 // merge: like Firestore setDoc(..., { merge: true }); unset: fields to delete
 export function setDoc(
-  collection: "accounts" | "proxies",
+  collection: DocCollection,
   id: string,
   value: Record<string, any>,
   opts: { merge?: boolean; unset?: string[] } = {}
@@ -69,7 +71,7 @@ export function setDoc(
   changed(collection);
 }
 
-export function deleteDoc(collection: "accounts" | "proxies", id: string) {
+export function deleteDoc(collection: DocCollection, id: string) {
   delete data[collection][id];
   changed(collection);
 }

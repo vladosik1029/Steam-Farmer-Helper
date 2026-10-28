@@ -6,10 +6,11 @@ import {
 } from "./core/security.ts";
 import { normalizeProxy, getProxyAgent } from "./core/proxy.ts";
 import {
-  obtainRefreshToken, connectSession, disconnectSession, getSession, requireSession, listSessions,
+  obtainRefreshToken, connectSession, disconnectSession, getSession, requireSession, listSessions, allSessions,
   fetchSteamWallet, fetchProfile, fetchSteamInventory, acceptSafeOffers, transferItems, addFreeLicenses
 } from "./core/steam.ts";
 import { guardState, pollAccount, respondGuard } from "./core/guard.ts";
+import { listOffers, myTradeLink, offerAction, parseTradeLink, partnerInventory, requireOfferItems, sendTrade, tradePartner } from "./core/trades.ts";
 import { authCode, timeOffset } from "./core/time.ts";
 import { logEvent } from "./core/events.ts";
 import { getPrices } from "./core/prices.ts";
@@ -207,6 +208,55 @@ const api: Record<string, Handler> = {
     return { code: secrets.revocationCode };
   },
 
+  // ---------------------------------------------------------------- trades by link
+
+  "trades/partner": (body) => tradePartner(requireSession(uid, requireSteamId(body.steamId)), body.link),
+
+  "trades/partner-inventory": async (body) => {
+    const appId = Number(body.appId) || 730;
+    const contextId = Number(body.contextId) || (appId === 753 ? 6 : 2);
+    return { inventory: await partnerInventory(requireSession(uid, requireSteamId(body.steamId)), body.link, appId, contextId) };
+  },
+
+  "trades/send": (body) => {
+    const partner = parseTradeLink(body.link).steamId;
+    return sendTrade(requireSession(uid, requireSteamId(body.steamId)), {
+      link: body.link,
+      give: requireOfferItems(body.give),
+      receive: requireOfferItems(body.receive),
+      message: body.message ? String(body.message) : undefined,
+      partnerIsOwn: store.listDocs("accounts").some((a) => String(a.steamId) === partner),
+      confirmGiveaway: !!body.confirmGiveaway
+    });
+  },
+
+  // Offers of one account, or of every connected one
+  "trades/offers": async (body) => {
+    const sessions = body.steamId
+      ? [requireSession(uid, requireSteamId(body.steamId))]
+      : allSessions().filter((s) => s.uid === uid && s.loggedIn);
+    const offers: any[] = [];
+    const errors: { steamId: string; accountName: string; error: string }[] = [];
+    for (const session of sessions) {
+      try {
+        offers.push(...await listOffers(session));
+      } catch (err: any) {
+        errors.push({ steamId: session.steamId, accountName: session.accountName, error: err.message });
+      }
+    }
+    return { offers, errors };
+  },
+
+  "trades/action": (body) => {
+    const action = String(body.action);
+    if (!["accept", "decline", "cancel"].includes(action)) throw new HttpError(400, "Unknown action");
+    const offerId = String(body.offerId || "");
+    if (!/^\d{1,20}$/.test(offerId)) throw new HttpError(400, "Invalid offer id");
+    return offerAction(requireSession(uid, requireSteamId(body.steamId)), offerId, action as "accept" | "decline" | "cancel");
+  },
+
+  "trades/my-link": (body) => myTradeLink(requireSession(uid, requireSteamId(body.steamId))),
+
   // ---------------------------------------------------------------- games
 
   "games/free": async () => ({ games: await findFreePromotions() }),
@@ -244,8 +294,8 @@ const api: Record<string, Handler> = {
 
 // ---------------------------------------------------------------- local data
 
-const COLLECTIONS = new Set(["accounts", "proxies", "logs"]);
-const WRITABLE = new Set(["accounts", "proxies"]);
+const COLLECTIONS = new Set(["accounts", "proxies", "partners", "logs"]);
+const WRITABLE = new Set(["accounts", "proxies", "partners"]);
 
 function requireCollection(value: unknown, writable = false) {
   const name = String(value);
@@ -262,12 +312,12 @@ function requireDocId(value: unknown) {
 const storeOps: Record<string, Handler> = {
   list: (body) => store.listDocs(requireCollection(body.collection)),
   set: (body) => store.setDoc(
-    requireCollection(body.collection, true) as "accounts" | "proxies",
+    requireCollection(body.collection, true) as store.DocCollection,
     requireDocId(body.id),
     body.data || {},
     { merge: !!body.merge, unset: Array.isArray(body.unset) ? body.unset.map(String) : [] }
   ),
-  delete: (body) => store.deleteDoc(requireCollection(body.collection, true) as "accounts" | "proxies", requireDocId(body.id)),
+  delete: (body) => store.deleteDoc(requireCollection(body.collection, true) as store.DocCollection, requireDocId(body.id)),
   addLog: (body) => store.addLog({ ...body.entry, id: requireDocId(body.entry?.id) })
 };
 

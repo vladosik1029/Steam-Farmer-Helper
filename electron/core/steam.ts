@@ -29,6 +29,23 @@ export type SteamSession = {
   ourOffers: Map<string, string>;
 };
 
+// Trade offer events of every session (new incoming offer, state changes),
+// for the trades page and notifications
+export type TradeEventKind = "new" | "sent-changed" | "received-changed";
+type TradeListener = (session: SteamSession, kind: TradeEventKind, offer: any) => void;
+const tradeListeners = new Set<TradeListener>();
+
+export function onTradeEvent(listener: TradeListener) {
+  tradeListeners.add(listener);
+  return () => tradeListeners.delete(listener);
+}
+
+const emitTrade = (session: SteamSession, kind: TradeEventKind, offer: any) => {
+  for (const listener of tradeListeners) {
+    try { listener(session, kind, offer); } catch (err: any) { console.error("[Trades]", err.message); }
+  }
+};
+
 // Keyed by `${uid}:${steamId}` so one site user can never use another user's Steam session
 const steamSessions = new Map<string, SteamSession>();
 const sessionKey = (uid: string, steamId: string) => `${uid}:${steamId}`;
@@ -63,7 +80,7 @@ export function listSessions(uid: string) {
     }));
 }
 
-const promisify = <T>(fn: (cb: (err: any, result: T) => void) => void) =>
+export const promisify = <T>(fn: (cb: (err: any, result: T) => void) => void) =>
   new Promise<T>((resolve, reject) => fn((err, result) => (err ? reject(err) : resolve(result))));
 
 // ---------------------------------------------------------------------------
@@ -157,8 +174,11 @@ function createSteamSession(uid: string, accountName: string, proxy?: string): S
   manager.on("pollFailure", (err: any) => {
     session.lastError = `Trade polling: ${err.message}`;
   });
-  // Incoming offers are handled by the automation tick (acceptSafeOffers), not by 'newOffer',
-  // so the same offer is never accepted twice
+  // Incoming offers are only reported here; accepting is up to the user (or the
+  // automation tick for gifts), so the same offer is never accepted twice
+  manager.on("newOffer", (offer: any) => emitTrade(session, "new", offer));
+  manager.on("sentOfferChanged", (offer: any) => emitTrade(session, "sent-changed", offer));
+  manager.on("receivedOfferChanged", (offer: any) => emitTrade(session, "received-changed", offer));
 
   return session;
 }
@@ -375,7 +395,7 @@ async function loadSteamInventory(session: SteamSession | undefined, steamId: st
 // Mobile confirmations
 // ---------------------------------------------------------------------------
 
-function requireIdentitySecret(session: SteamSession) {
+export function requireIdentitySecret(session: SteamSession) {
   if (!session.identitySecret) {
     throw new HttpError(400, "В maFile нет identity_secret, подтверждения недоступны.");
   }
@@ -390,6 +410,20 @@ export async function listConfirmations(session: SteamSession) {
 export async function respondToConfirmation(session: SteamSession, conf: any, accept: boolean) {
   const { time, key } = confirmationKey(requireIdentitySecret(session), accept ? "allow" : "cancel");
   await community(session.proxy, () => promisify((cb) => conf.respond(time, key, accept, cb)));
+}
+
+// Confirms a sent offer on the phone side. Returns a note instead of throwing:
+// the offer is already out, and the Steam Guard poll can still confirm it.
+export async function confirmOffer(session: SteamSession, offerId: string): Promise<string | null> {
+  try {
+    const confs = await listConfirmations(session);
+    const conf = confs.find((c) => String(c.creator) === offerId);
+    if (!conf) return "подтверждение ещё не появилось, подтвердите его в разделе Steam Guard";
+    await respondToConfirmation(session, conf, true);
+    return null;
+  } catch (err: any) {
+    return `не подтверждён сразу (${err.message}), подтвердите его в разделе Steam Guard`;
+  }
 }
 
 export function getOffer(session: SteamSession, offerId: string) {
@@ -467,15 +501,9 @@ export async function transferItems(from: SteamSession, to: SteamSession, appId:
 
   const notes: string[] = [];
   if (status === "pending") {
-    try {
-      const { time, key } = confirmationKey(from.identitySecret!, "conf");
-      const confs = await community(from.proxy, () => promisify<any[]>((cb) => from.community.getConfirmations(time, key, cb)));
-      const conf = confs.find((c) => String(c.creator) === offerId);
-      if (conf) await respondToConfirmation(from, conf, true);
-      else notes.push("подтверждение ещё не появилось, приложение подтвердит его само");
-    } catch (err: any) {
-      notes.push(`не подтверждён сразу (${err.message}), приложение подтвердит его само`);
-    }
+    // Our own transfer: the Guard poll confirms it later if this attempt fails
+    const note = await confirmOffer(from, offerId);
+    if (note) notes.push(note.replace("подтвердите его в разделе Steam Guard", "приложение подтвердит его само"));
   }
 
   // Receiver gives nothing, so accepting is always safe

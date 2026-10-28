@@ -1,4 +1,15 @@
 export type { GuardAccount, GuardConfirmation, ConfirmationKind } from '../../electron/core/guard';
+export type { TradeOfferView } from '../../electron/core/trades';
+
+export interface TradePartner {
+  id: string;
+  label: string;
+  link: string;
+  steamId: string;
+  personaName?: string;
+  avatar?: string;
+  createdAt: number;
+}
 
 export interface SteamAccount {
   id: string;

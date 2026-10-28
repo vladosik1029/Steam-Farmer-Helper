@@ -14,6 +14,7 @@ const bridge = {
   store: (op: string, body?: unknown) => ipcRenderer.invoke("store", op, body),
   onStoreChanged: (listener: (collection: string) => void) => subscribe("store:changed", listener),
   onGuardChanged: (listener: () => void) => subscribe("guard:changed", listener),
+  onTradesChanged: (listener: () => void) => subscribe("trades:changed", listener),
   onNavigate: (listener: (page: string) => void) => subscribe("app:navigate", listener),
   version: () => ipcRenderer.invoke("app:version") as Promise<string>
 };
