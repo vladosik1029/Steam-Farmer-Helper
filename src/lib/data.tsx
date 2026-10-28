@@ -2,7 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { apiPost } from './api';
 import { listDocs, onStoreChanged } from './store';
 import { loginSteamAccount } from './accounts';
-import type { SteamAccount, ProxyConfig, SessionInfo, LogEntry } from './types';
+import { bridge } from './bridge';
+import type { SteamAccount, ProxyConfig, SessionInfo, LogEntry, GuardAccount } from './types';
 
 interface AppData {
   accounts: SteamAccount[];
@@ -10,6 +11,9 @@ interface AppData {
   logs: LogEntry[];
   sessions: Record<string, SessionInfo>;
   refreshSessions: () => Promise<void>;
+  // Steam Guard feed: pending confirmations of every connected account
+  guard: GuardAccount[];
+  refreshGuard: () => Promise<void>;
 }
 
 const DataContext = createContext<AppData | null>(null);
@@ -29,6 +33,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [proxies, setProxies] = useState<ProxyConfig[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({});
+  const [guard, setGuard] = useState<GuardAccount[]>([]);
   const [loaded, setLoaded] = useState(false);
   const restoredRef = useRef(false);
 
@@ -62,6 +67,21 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(timer);
   }, [refreshSessions]);
 
+  // The main process polls confirmations itself and says when the feed changed
+  const refreshGuard = useCallback(async () => {
+    try {
+      const data = await apiPost<{ accounts: GuardAccount[] }>('/api/guard/state');
+      setGuard(data.accounts);
+    } catch (err) {
+      console.warn('Guard state failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshGuard();
+    return bridge().onGuardChanged(() => { refreshGuard(); });
+  }, [refreshGuard]);
+
   // Session restore: on app start, reconnect accounts that run automation
   useEffect(() => {
     if (!loaded || restoredRef.current || accounts.length === 0) return;
@@ -79,7 +99,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }, [loaded, accounts, refreshSessions]);
 
   return (
-    <DataContext.Provider value={{ accounts, proxies, logs, sessions, refreshSessions }}>
+    <DataContext.Provider value={{ accounts, proxies, logs, sessions, refreshSessions, guard, refreshGuard }}>
       {children}
     </DataContext.Provider>
   );

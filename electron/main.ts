@@ -1,11 +1,12 @@
 import path from "path";
-import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, Menu, dialog, Notification, Tray, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
 import updater from "electron-updater";
 import icon from "../resources/icon.png?asset";
 import { setSecretsKey } from "./core/security.ts";
 import { onEvent } from "./core/events.ts";
 import { loadOrCreateSecretsKey } from "./keystore.ts";
-import { openStore, flushStore, addLog } from "./store.ts";
+import { configureGuard, pendingCount, startGuard, type GuardAccount, type GuardConfirmation } from "./core/guard.ts";
+import { openStore, flushStore, addLog, listDocs } from "./store.ts";
 import { registerIpc, LOCAL_UID } from "./ipc.ts";
 
 const RENDERER_URL = process.env.ELECTRON_RENDERER_URL;
@@ -74,14 +75,38 @@ function createWindow() {
   else mainWindow.loadFile(path.join(import.meta.dirname, "../renderer/index.html"));
 }
 
-function createTray() {
-  tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }));
-  tray.setToolTip("SteamFarmer Helper");
+// Opens the window on a given page (from a notification or the tray menu)
+function openPage(page: string) {
+  showWindow();
+  mainWindow?.webContents.send("app:navigate", page);
+}
+
+function updateTray() {
+  if (!tray) return;
+  const pending = pendingCount();
+  tray.setToolTip(pending ? `SteamFarmer Helper: ${pending} подтвержд.` : "SteamFarmer Helper");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Открыть", click: showWindow },
+    { label: pending ? `Steam Guard: ${pending} ждут подтверждения` : "Steam Guard", click: () => openPage("guard") },
     { type: "separator" },
     { label: "Выход", click: () => { quitting = true; app.quit(); } }
   ]));
+}
+
+function notifyConfirmations(account: GuardAccount, added: GuardConfirmation[]) {
+  if (!Notification.isSupported()) return;
+  const dangerous = added.some((c) => c.danger);
+  const notification = new Notification({
+    title: `${dangerous ? "⚠ " : ""}Steam Guard · ${account.accountName}`,
+    body: added.length === 1 ? added[0].title : `Новых подтверждений: ${added.length}`
+  });
+  notification.on("click", () => openPage("guard"));
+  notification.show();
+}
+
+function createTray() {
+  tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }));
+  updateTray();
   tray.on("click", showWindow);
 }
 
@@ -90,13 +115,23 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", showWindow);
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     const dataDir = app.getPath("userData");
-    setSecretsKey(loadOrCreateSecretsKey(dataDir));
+    setSecretsKey(await loadOrCreateSecretsKey(dataDir));
     openStore(dataDir, (collection) => mainWindow?.webContents.send("store:changed", collection));
 
     // What the core does on its own (automation) goes straight into the history
     onEvent((event) => addLog({ ...event, id: `s-${event.id}`, ownerUid: LOCAL_UID, source: "server" }));
+
+    configureGuard({
+      isOwnAccount: (steamId) => listDocs("accounts").some((a) => String(a.steamId) === steamId),
+      onChange: () => {
+        mainWindow?.webContents.send("guard:changed");
+        updateTray();
+      },
+      onNew: notifyConfirmations
+    });
+    startGuard();
 
     registerIpc(isTrustedSender);
     ipcMain.handle("app:version", () => app.getVersion());
@@ -105,6 +140,11 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
 
     if (app.isPackaged) updater.autoUpdater.checkForUpdatesAndNotify().catch((err) => console.warn("[Updater]", err.message));
+  }).catch((err) => {
+    console.error("[Startup]", err);
+    dialog.showErrorBox("SteamFarmer Helper не запустился", String(err?.message || err));
+    quitting = true;
+    app.quit();
   });
 
   app.on("before-quit", () => {

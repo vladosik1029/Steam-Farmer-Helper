@@ -194,9 +194,10 @@ export function InventoryView({ initialAccountId }: { initialAccountId?: string 
         fromSteamId: steamId,
         toSteamId: target.steamId,
         appId,
-        assetIds: tradable.map((i) => i.assetid)
+        items: tradable.map((i) => ({ assetid: i.assetid, amount: i.amount || 1 }))
       });
-      setNotice(`Отправлено ${result.items} предм. (трейд #${result.offerId}, статус: ${result.status}).`);
+      const notes = result.notes?.length ? ` Трейд ${result.notes.join('; ')}.` : '';
+      setNotice(`Отправлено ${result.items} предм. (трейд #${result.offerId}).${notes}`);
       await addLog({ level: 'success', type: 'transfer', message: `Передано ${result.items} предм. → ${target.accountName}`, accountName: account.accountName, steamId });
       setTimeout(loadInventory, 4000);
     } catch (err: any) {

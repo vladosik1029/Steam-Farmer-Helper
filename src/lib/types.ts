@@ -1,3 +1,5 @@
+export type { GuardAccount, GuardConfirmation, ConfirmationKind } from '../../electron/core/guard';
+
 export interface SteamAccount {
   id: string;
   accountName: string;
