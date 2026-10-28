@@ -37,7 +37,7 @@ export function LogsView() {
 
   return (
     <>
-      <PageHeader title="История и логи" subtitle="Действия на сайте и то, что сервер сделал сам (последние 500 записей)" />
+      <PageHeader title="История и логи" subtitle="Ваши действия и то, что приложение сделало само (последние 500 записей)" />
 
       <div className="card p-4 mb-5 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
@@ -65,7 +65,7 @@ export function LogsView() {
         <div className="card divide-y divide-line/60">
           {rows.map((l) => (
             <div key={l.id} className="px-4 py-3 flex items-start gap-3 text-sm">
-              <span className="text-faint mt-0.5" title={l.source === 'server' ? 'Сервер' : 'Действие на сайте'}>
+              <span className="text-faint mt-0.5" title={l.source === 'server' ? 'Приложение' : 'Ваше действие'}>
                 {l.source === 'server' ? <Server size={14} /> : <MousePointerClick size={14} />}
               </span>
               <span className={`chip shrink-0 ${LEVEL_STYLE[l.level] || LEVEL_STYLE.info}`}>{LEVEL_NAME[l.level] || l.level}</span>

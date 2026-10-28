@@ -1,0 +1,30 @@
+appId: io.github.vladosik1029.steamfarmerhelper
+productName: SteamFarmer Helper
+copyright: GPL-3.0
+directories:
+  buildResources: resources
+  output: release/${version}
+files:
+  - out/**
+  - resources/**
+  - package.json
+asarUnpack:
+  - resources/**
+win:
+  icon: resources/icon.png
+  target:
+    - nsis
+    - portable
+  artifactName: SteamFarmerHelper-${version}-${arch}-${target}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: SteamFarmer Helper
+  artifactName: SteamFarmerHelper-Setup-${version}.${ext}
+portable:
+  artifactName: SteamFarmerHelper-Portable-${version}.${ext}
+publish:
+  provider: github
+  owner: vladosik1029
+  repo: Steam-Farmer-Helper

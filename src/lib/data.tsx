@@ -1,14 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import type { User } from 'firebase/auth';
-import { db } from './firebase';
 import { apiPost } from './api';
-import { addLog } from './logs';
+import { listDocs, onStoreChanged } from './store';
 import { loginSteamAccount } from './accounts';
 import type { SteamAccount, ProxyConfig, SessionInfo, LogEntry } from './types';
 
 interface AppData {
-  user: User;
   accounts: SteamAccount[];
   proxies: ProxyConfig[];
   logs: LogEntry[];
@@ -19,46 +15,37 @@ interface AppData {
 const DataContext = createContext<AppData | null>(null);
 
 const SESSION_POLL_MS = 20_000;
-const EVENTS_POLL_MS = 15_000;
 
-export function DataProvider({ user, children }: { user: User; children: React.ReactNode }) {
+function toAccounts(docs: any[]): SteamAccount[] {
+  return docs.map((data) => ({
+    ...data,
+    steamId: data.steamId ? String(data.steamId) : '',
+    accountName: data.accountName ? String(data.accountName) : ''
+  } as SteamAccount)).sort((a, b) => a.accountName.localeCompare(b.accountName));
+}
+
+export function DataProvider({ children }: { children: React.ReactNode }) {
   const [accounts, setAccounts] = useState<SteamAccount[]>([]);
   const [proxies, setProxies] = useState<ProxyConfig[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({});
+  const [loaded, setLoaded] = useState(false);
   const restoredRef = useRef(false);
 
+  // Local data lives in the main process; it tells us when a collection changes
   useEffect(() => {
-    const unsubAccounts = onSnapshot(query(collection(db, 'users', user.uid, 'steamAccounts')), (snapshot) => {
-      setAccounts(snapshot.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          ...data,
-          steamId: data.steamId ? String(data.steamId) : '',
-          accountName: data.accountName ? String(data.accountName) : ''
-        } as SteamAccount;
-      }).sort((a, b) => a.accountName.localeCompare(b.accountName)));
-    }, (err) => console.error('Accounts listener', err));
-
-    const unsubProxies = onSnapshot(query(collection(db, 'users', user.uid, 'proxies')), (snapshot) => {
-      setProxies(snapshot.docs
-        .map((d) => ({ id: d.id, ...d.data() } as ProxyConfig))
-        .filter((px) => !(px as any).deleted));
-    }, (err) => console.error('Proxies listener', err));
-
-    const unsubLogs = onSnapshot(
-      query(collection(db, 'users', user.uid, 'logs'), orderBy('time', 'desc'), limit(500)),
-      (snapshot) => setLogs(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as LogEntry))),
-      (err) => console.error('Logs listener', err)
-    );
-
-    return () => {
-      unsubAccounts();
-      unsubProxies();
-      unsubLogs();
+    const load = {
+      accounts: () => listDocs<any>('accounts').then((d) => setAccounts(toAccounts(d))),
+      proxies: () => listDocs<any>('proxies').then((d) => setProxies(d.filter((px) => !px.deleted) as ProxyConfig[])),
+      logs: () => listDocs<LogEntry>('logs').then(setLogs)
     };
-  }, [user.uid]);
+    Promise.all([load.accounts(), load.proxies(), load.logs()])
+      .catch((err) => console.error('Local data', err))
+      .finally(() => setLoaded(true));
+    return onStoreChanged((collection) => {
+      load[collection]().catch((err) => console.error(`Local ${collection}`, err));
+    });
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -75,29 +62,9 @@ export function DataProvider({ user, children }: { user: User; children: React.R
     return () => clearInterval(timer);
   }, [refreshSessions]);
 
-  // Server-side events (auto-accepted trades, confirmations) -> Firestore history
+  // Session restore: on app start, reconnect accounts that run automation
   useEffect(() => {
-    const cursorKey = `steamfarmer.eventsCursor.${user.uid}`;
-    const pull = async () => {
-      let since = 0;
-      try { since = Number(localStorage.getItem(cursorKey)) || 0; } catch {}
-      try {
-        const { events } = await apiPost<{ events: any[] }>('/api/events', { since });
-        for (const e of events) {
-          await addLog({ ...e, id: `s-${e.id}`, source: 'server' });
-          since = Math.max(since, e.time);
-        }
-        try { localStorage.setItem(cursorKey, String(since)); } catch {}
-      } catch {}
-    };
-    pull();
-    const timer = setInterval(pull, EVENTS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [user.uid]);
-
-  // Session restore: after a server restart, reconnect accounts that run automation
-  useEffect(() => {
-    if (restoredRef.current || accounts.length === 0) return;
+    if (!loaded || restoredRef.current || accounts.length === 0) return;
     restoredRef.current = true;
     (async () => {
       const { sessions: live } = await apiPost<{ sessions: SessionInfo[] }>('/api/steam/sessions').catch(() => ({ sessions: [] as SessionInfo[] }));
@@ -109,10 +76,10 @@ export function DataProvider({ user, children }: { user: User; children: React.R
       }
       refreshSessions();
     })();
-  }, [accounts, refreshSessions]);
+  }, [loaded, accounts, refreshSessions]);
 
   return (
-    <DataContext.Provider value={{ user, accounts, proxies, logs, sessions, refreshSessions }}>
+    <DataContext.Provider value={{ accounts, proxies, logs, sessions, refreshSessions }}>
       {children}
     </DataContext.Provider>
   );

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { Plus, RefreshCw, Activity, Trash2, Palette, EyeOff, Percent, Network, KeyRound, Check } from 'lucide-react';
-import { db } from '../lib/firebase';
+import { Plus, RefreshCw, Activity, Trash2, Palette, EyeOff, Percent, Network, KeyRound, Check, Upload } from 'lucide-react';
+import { setDoc, deleteDoc } from '../lib/store';
 import { apiPost } from '../lib/api';
 import { useData } from '../lib/data';
 import { usePrefs } from '../lib/prefs';
@@ -19,7 +18,7 @@ function Section({ icon, title, children }: { icon: React.ReactNode; title: stri
 }
 
 export function SettingsView() {
-  const { user, proxies } = useData();
+  const { proxies } = useData();
   const { prefs, setPrefs } = usePrefs();
   const [newLabel, setNewLabel] = useState('');
   const [newUrl, setNewUrl] = useState('');
@@ -45,11 +44,11 @@ export function SettingsView() {
     setLoading(true);
     try {
       const proxyId = `proxy_${Date.now()}`;
-      await setDoc(doc(db, 'users', user.uid, 'proxies', proxyId), {
+      await setDoc('proxies', proxyId, {
         label: newLabel,
         url: newUrl.trim(),
         status: 'active',
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString()
       });
       setNewLabel('');
       setNewUrl('');
@@ -62,7 +61,7 @@ export function SettingsView() {
 
   const deleteProxy = async (id: string) => {
     if (!window.confirm('Удалить этот прокси?')) return;
-    await setDoc(doc(db, 'users', user.uid, 'proxies', id), { deleted: true }, { merge: true }).catch(console.error);
+    await deleteDoc('proxies', id).catch(console.error);
   };
 
   const maskUrl = (url: string) => url.replace(/\/\/([^:@/]+):([^@]+)@/, '//$1:••••@');
@@ -153,11 +152,60 @@ export function SettingsView() {
 
       <Section icon={<KeyRound size={18} />} title="Безопасность">
         <ul className="text-sm text-muted space-y-2 list-disc pl-5">
+          <li>Все данные хранятся только на этом компьютере, в папке профиля Windows. Никакого сервера нет.</li>
           <li>Пароли Steam не хранятся: после первого входа остаётся только зашифрованный refresh-токен (около 200 дней).</li>
-          <li>Ключ шифрования лежит в файле <code className="text-accent">.env.local</code> на сервере (<code>SECRETS_KEY</code>). Сохраните его копию: без него все токены придётся получать заново.</li>
-          <li>Все запросы к серверу проверяются по вашему входу в Firebase.</li>
+          <li>Секреты maFile и токены зашифрованы ключом, который защищён вашей учётной записью Windows. Скопированная на другой ПК папка профиля не расшифруется.</li>
+          <li>Любая программа, запущенная под вашей учётной записью Windows, теоретически может открыть эти данные. Не запускайте непроверенные программы.</li>
         </ul>
       </Section>
+
+      <ImportLegacySection />
     </div>
+  );
+}
+
+// One-off move from the old web version: a file from `npm run export:firebase` + its SECRETS_KEY
+function ImportLegacySection() {
+  const [file, setFile] = useState<File | null>(null);
+  const [secretsKey, setSecretsKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const runImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file || !secretsKey) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const data = JSON.parse(await file.text());
+      const r = await apiPost('/api/migrate/import', { data, secretsKey });
+      setResult(`Импортировано: аккаунтов ${r.accounts}, прокси ${r.proxies}, записей истории ${r.logs}.`
+        + (r.failed.length ? ` Не расшифровались: ${r.failed.join(', ')}.` : ''));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section icon={<Upload size={18} />} title="Импорт из веб-версии">
+      <p className="text-sm text-muted mb-4">
+        Перенос аккаунтов, прокси и истории из старой версии с Firebase. В папке старого проекта выполните
+        {' '}<code className="text-accent">npm run export:firebase</code>, выберите получившийся файл и вставьте
+        {' '}<code>SECRETS_KEY</code> из <code>.env.local</code> старого проекта.
+      </p>
+      <form onSubmit={runImport} className="grid md:grid-cols-[1fr_1fr_auto] gap-3">
+        <input type="file" accept=".json,application/json" onChange={(e) => setFile(e.target.files?.[0] || null)} className="input text-xs" />
+        <input type="password" value={secretsKey} onChange={(e) => setSecretsKey(e.target.value)} className="input font-mono text-xs" placeholder="SECRETS_KEY (64 hex-символа)" autoComplete="off" />
+        <button type="submit" disabled={busy || !file || !secretsKey} className="btn-primary">
+          {busy ? <RefreshCw className="animate-spin" size={15} /> : <Upload size={15} />} Импортировать
+        </button>
+      </form>
+      {result && <p className="text-sm text-ok mt-3">{result}</p>}
+      {error && <p className="text-sm text-bad mt-3">{error}</p>}
+    </Section>
   );
 }

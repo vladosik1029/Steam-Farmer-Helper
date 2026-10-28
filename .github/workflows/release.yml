@@ -1,0 +1,28 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the Windows installer and publish it on GitHub Releases
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: SHA-256 of the installers
+        shell: pwsh
+        run: Get-ChildItem release -Recurse -Include *.exe | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize

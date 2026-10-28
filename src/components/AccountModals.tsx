@@ -1,7 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { Upload, RefreshCw, Trash2 } from 'lucide-react';
-import { db } from '../lib/firebase';
+import { setDoc, deleteDoc } from '../lib/store';
 import { apiPost } from '../lib/api';
 import { saveSealedSecrets, updateAccount } from '../lib/accounts';
 import { addLog } from '../lib/logs';
@@ -44,7 +43,6 @@ function ProxySelect({ value, onChange }: { value: string; onChange: (v: string)
 }
 
 export function EditAccountModal({ account, onClose }: { account: SteamAccount; onClose: () => void }) {
-  const { user } = useData();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Never prefilled: the password is only used once to get a refresh token and is not stored
@@ -82,7 +80,7 @@ export function EditAccountModal({ account, onClose }: { account: SteamAccount; 
   const handleDelete = async () => {
     if (!window.confirm(`Удалить аккаунт ${account.accountName} из списка? Секреты и токен будут удалены.`)) return;
     try {
-      await deleteDoc(doc(db, 'users', user.uid, 'steamAccounts', account.id));
+      await deleteDoc('accounts', account.id);
       await addLog({ level: 'warning', type: 'account', message: 'Аккаунт удалён из списка', accountName: account.accountName });
       onClose();
     } catch (err: any) {
@@ -117,7 +115,7 @@ export function EditAccountModal({ account, onClose }: { account: SteamAccount; 
             autoComplete="new-password"
           />
           <p className="text-xs text-faint">
-            Пароль не сохраняется: сервер один раз входит в Steam и хранит только зашифрованный токен.
+            Пароль не сохраняется: приложение один раз входит в Steam и хранит только зашифрованный токен.
             {account.tokenExpires ? ` Текущий токен действует до ${new Date(account.tokenExpires).toLocaleDateString()}.` : ''}
           </p>
         </div>
@@ -137,7 +135,6 @@ type ImportRow = { fileName: string; data: any; password: string; status?: strin
 
 // Imports one or many maFiles at once
 export function AddAccountModal({ onClose }: { onClose: () => void }) {
-  const { user } = useData();
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [proxy, setProxy] = useState('');
   const [loading, setLoading] = useState(false);
@@ -173,7 +170,7 @@ export function AddAccountModal({ onClose }: { onClose: () => void }) {
       }
       updateRow(i, { status: 'busy', error: undefined });
       try {
-        // Secrets are encrypted on the server; with a password it also logs in once
+        // Secrets are encrypted by the app core; with a password it also logs in once
         // and returns the real SteamID plus a refresh token. The password is not stored.
         const sealedResult = await apiPost('/api/accounts/seal', {
           accountName,
@@ -186,8 +183,7 @@ export function AddAccountModal({ onClose }: { onClose: () => void }) {
 
         const steamId = String(sealedResult.steamId || data.Session?.SteamID || data.steamid || '');
         const accountId = steamId || `acc_${Date.now()}`;
-        await setDoc(doc(db, 'users', user.uid, 'steamAccounts', accountId), {
-          ownerUid: user.uid,
+        await setDoc('accounts', accountId, {
           steamId,
           accountName,
           personaName: accountName,
@@ -237,7 +233,7 @@ export function AddAccountModal({ onClose }: { onClose: () => void }) {
           <div className="w-12 h-12 rounded-xl bg-accent/15 text-accent flex items-center justify-center"><Upload size={22} /></div>
           <div className="text-center">
             <p className="font-bold text-ink">Выберите или перетащите maFile</p>
-            <p className="text-xs text-muted">Файлы читаются в браузере, секреты шифруются на сервере</p>
+            <p className="text-xs text-muted">Файлы читаются локально, секреты шифруются на этом компьютере</p>
           </div>
         </div>
 
