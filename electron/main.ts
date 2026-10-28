@@ -6,6 +6,7 @@ import { setSecretsKey } from "./core/security.ts";
 import { onEvent } from "./core/events.ts";
 import { loadOrCreateSecretsKey } from "./keystore.ts";
 import { configureGuard, pendingCount, startGuard, type GuardAccount, type GuardConfirmation } from "./core/guard.ts";
+import { watchTrades, type TradeOfferView } from "./core/trades.ts";
 import { openStore, flushStore, addLog, listDocs } from "./store.ts";
 import { registerIpc, LOCAL_UID } from "./ipc.ts";
 
@@ -104,6 +105,19 @@ function notifyConfirmations(account: GuardAccount, added: GuardConfirmation[]) 
   notification.show();
 }
 
+function notifyIncomingTrade(offer: TradeOfferView) {
+  if (!Notification.isSupported()) return;
+  const give = offer.itemsToGive.length;
+  const notification = new Notification({
+    title: `Новый обмен · ${offer.accountName}`,
+    body: give > 0
+      ? `Просят ${give} предм., предлагают ${offer.itemsToReceive.length}. Проверьте перед принятием.`
+      : `Вам дарят ${offer.itemsToReceive.length} предм.`
+  });
+  notification.on("click", () => openPage("trades"));
+  notification.show();
+}
+
 function createTray() {
   tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }));
   updateTray();
@@ -132,6 +146,7 @@ if (!app.requestSingleInstanceLock()) {
       onNew: notifyConfirmations
     });
     startGuard();
+    watchTrades(() => mainWindow?.webContents.send("trades:changed"), notifyIncomingTrade);
 
     registerIpc(isTrustedSender);
     ipcMain.handle("app:version", () => app.getVersion());

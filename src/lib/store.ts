@@ -2,7 +2,8 @@ import { bridge, type IpcResult } from './bridge';
 
 // Local data (accounts, proxies, history) kept by the main process in the profile folder
 
-type Collection = 'accounts' | 'proxies' | 'logs';
+type Collection = 'accounts' | 'proxies' | 'partners' | 'logs';
+type DocCollection = Exclude<Collection, 'logs'>;
 
 async function call<T = void>(op: string, body: Record<string, unknown>): Promise<T> {
   const result: IpcResult<T> = await bridge().store(op, body);
@@ -13,13 +14,13 @@ async function call<T = void>(op: string, body: Record<string, unknown>): Promis
 export const listDocs = <T>(collection: Collection) => call<T[]>('list', { collection });
 
 export const setDoc = (
-  collection: 'accounts' | 'proxies',
+  collection: DocCollection,
   id: string,
   data: Record<string, unknown>,
   opts: { merge?: boolean; unset?: string[] } = {}
 ) => call('set', { collection, id, data, ...opts });
 
-export const deleteDoc = (collection: 'accounts' | 'proxies', id: string) => call('delete', { collection, id });
+export const deleteDoc = (collection: DocCollection, id: string) => call('delete', { collection, id });
 
 export const addLogDoc = (entry: Record<string, unknown>) => call('addLog', { entry });
 

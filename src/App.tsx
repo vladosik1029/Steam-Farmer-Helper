@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Users, Package, Zap, Gamepad2, ScrollText, Settings, Plus, Play,
-  RefreshCw, Eye, EyeOff, User as UserIcon, ShieldCheck
+  RefreshCw, Eye, EyeOff, User as UserIcon, ShieldCheck, ArrowLeftRight
 } from 'lucide-react';
 import { DataProvider, useData } from './lib/data';
 import { PrefsProvider, usePrefs } from './lib/prefs';
@@ -16,14 +16,16 @@ import { GamesView } from './views/GamesView';
 import { LogsView } from './views/LogsView';
 import { SettingsView } from './views/SettingsView';
 import { GuardView } from './views/GuardView';
+import { TradesView } from './views/TradesView';
 import { bridge } from './lib/bridge';
 
-type Tab = 'dashboard' | 'accounts' | 'guard' | 'inventory' | 'automation' | 'games' | 'logs' | 'settings';
+type Tab = 'dashboard' | 'accounts' | 'guard' | 'trades' | 'inventory' | 'automation' | 'games' | 'logs' | 'settings';
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Обзор', icon: <LayoutDashboard size={18} /> },
   { id: 'accounts', label: 'Аккаунты', icon: <Users size={18} /> },
   { id: 'guard', label: 'Steam Guard', icon: <ShieldCheck size={18} /> },
+  { id: 'trades', label: 'Обмены', icon: <ArrowLeftRight size={18} /> },
   { id: 'inventory', label: 'Инвентарь', icon: <Package size={18} /> },
   { id: 'automation', label: 'Автоматизация', icon: <Zap size={18} /> },
   { id: 'games', label: 'Игры', icon: <Gamepad2 size={18} /> },
@@ -149,6 +151,7 @@ function Shell() {
             {tab === 'accounts' && <AccountsView onOpenInventory={openInventory} />}
             {tab === 'inventory' && <InventoryView initialAccountId={inventoryAccountId} />}
             {tab === 'guard' && <GuardView />}
+            {tab === 'trades' && <TradesView />}
             {tab === 'automation' && <AutomationView onOpenGuard={() => setTab('guard')} />}
             {tab === 'games' && <GamesView />}
             {tab === 'logs' && <LogsView />}

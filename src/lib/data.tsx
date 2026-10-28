@@ -3,11 +3,13 @@ import { apiPost } from './api';
 import { listDocs, onStoreChanged } from './store';
 import { loginSteamAccount } from './accounts';
 import { bridge } from './bridge';
-import type { SteamAccount, ProxyConfig, SessionInfo, LogEntry, GuardAccount } from './types';
+import type { SteamAccount, ProxyConfig, SessionInfo, LogEntry, GuardAccount, TradePartner } from './types';
 
 interface AppData {
   accounts: SteamAccount[];
   proxies: ProxyConfig[];
+  // Saved trade partners (trade links with a label)
+  partners: TradePartner[];
   logs: LogEntry[];
   sessions: Record<string, SessionInfo>;
   refreshSessions: () => Promise<void>;
@@ -31,6 +33,7 @@ function toAccounts(docs: any[]): SteamAccount[] {
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const [accounts, setAccounts] = useState<SteamAccount[]>([]);
   const [proxies, setProxies] = useState<ProxyConfig[]>([]);
+  const [partners, setPartners] = useState<TradePartner[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({});
   const [guard, setGuard] = useState<GuardAccount[]>([]);
@@ -42,9 +45,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const load = {
       accounts: () => listDocs<any>('accounts').then((d) => setAccounts(toAccounts(d))),
       proxies: () => listDocs<any>('proxies').then((d) => setProxies(d.filter((px) => !px.deleted) as ProxyConfig[])),
+      partners: () => listDocs<TradePartner>('partners').then((d) => setPartners(d.sort((a, b) => a.label.localeCompare(b.label)))),
       logs: () => listDocs<LogEntry>('logs').then(setLogs)
     };
-    Promise.all([load.accounts(), load.proxies(), load.logs()])
+    Promise.all([load.accounts(), load.proxies(), load.partners(), load.logs()])
       .catch((err) => console.error('Local data', err))
       .finally(() => setLoaded(true));
     return onStoreChanged((collection) => {
@@ -99,7 +103,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }, [loaded, accounts, refreshSessions]);
 
   return (
-    <DataContext.Provider value={{ accounts, proxies, logs, sessions, refreshSessions, guard, refreshGuard }}>
+    <DataContext.Provider value={{ accounts, proxies, partners, logs, sessions, refreshSessions, guard, refreshGuard }}>
       {children}
     </DataContext.Provider>
   );
