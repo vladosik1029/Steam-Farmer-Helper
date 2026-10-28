@@ -1,5 +1,6 @@
 import { HttpError } from "./security.ts";
 import { logEvent } from "./events.ts";
+import { cooldownUntil, isRateLimit } from "./community.ts";
 import { allSessions, getOffer, listConfirmations, respondToConfirmation, type SteamSession } from "./steam.ts";
 
 // ---------------------------------------------------------------------------
@@ -9,9 +10,9 @@ import { allSessions, getOffer, listConfirmations, respondToConfirmation, type S
 // trades this app created; everything else waits for the user.
 // ---------------------------------------------------------------------------
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 60_000;
 // Spread requests out so many accounts don't hit Steam's rate limit at once
-const ACCOUNT_GAP_MS = 1_500;
+const ACCOUNT_GAP_MS = 2_000;
 
 const TYPE_TRADE = 2;
 const TYPE_MARKET = 3;
@@ -46,6 +47,8 @@ export type GuardAccount = {
   confirmations: GuardConfirmation[];
   fetchedAt: number | null;
   error: string | null;
+  // Steam answered 429: checks for this account resume at this time
+  rateLimitedUntil: number | null;
 };
 
 type GuardHooks = {
@@ -148,11 +151,12 @@ async function describe(session: SteamSession, conf: any): Promise<GuardConfirma
   return item;
 }
 
-// Approves what automation is allowed to: market listings and safe trades this app created
-async function autoConfirm(session: SteamSession, confs: any[], items: GuardConfirmation[]) {
+// Safe trades this app created are always approved (the user started them);
+// market listings only with automation
+async function autoConfirm(session: SteamSession, confs: any[], items: GuardConfirmation[], market: boolean) {
   const done = new Set<string>();
   for (const item of items) {
-    const allowed = !item.danger && (item.kind === "market" || (item.kind === "trade" && item.ours));
+    const allowed = !item.danger && ((market && item.kind === "market") || (item.kind === "trade" && item.ours));
     if (!allowed) continue;
     const conf = confs.find((c) => String(c.id) === item.id);
     try {
@@ -186,22 +190,24 @@ export async function pollAccount(session: SteamSession, auto = session.automati
     accountName: session.accountName,
     confirmations: [],
     fetchedAt: null,
-    error: null
+    error: null,
+    rateLimitedUntil: null
   };
   let accepted = 0;
   try {
     const confs = await listConfirmations(session);
     let items = await Promise.all(confs.map((c) => describe(session, c)));
-    if (auto) {
-      const done = await autoConfirm(session, confs, items);
-      accepted = done.size;
-      items = items.filter((i) => !done.has(i.id));
-    }
+    const done = await autoConfirm(session, confs, items, auto);
+    accepted = done.size;
+    items = items.filter((i) => !done.has(i.id));
     entry.confirmations = items.sort((a, b) => b.time - a.time);
     entry.fetchedAt = Date.now();
     entry.error = null;
+    entry.rateLimitedUntil = null;
   } catch (err: any) {
-    entry.error = err.message;
+    // A 429 is shared by every account on the IP; the page shows it once, not per account
+    entry.rateLimitedUntil = isRateLimit(err) ? cooldownUntil(session.proxy) || Date.now() + 60_000 : null;
+    entry.error = entry.rateLimitedUntil ? null : err.message;
   }
   feed.set(session.steamId, entry);
 
@@ -258,6 +264,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function pollAll() {
   for (const session of allSessions().filter(canPoll)) {
+    // Steam paused this IP: don't add to it, just show when checks resume
+    const paused = cooldownUntil(session.proxy);
+    if (paused) {
+      const entry = feed.get(session.steamId);
+      if (entry) entry.rateLimitedUntil = paused;
+      else feed.set(session.steamId, { steamId: session.steamId, accountName: session.accountName, confirmations: [], fetchedAt: null, error: null, rateLimitedUntil: paused });
+      continue;
+    }
     await pollAccount(session).catch((err) => console.error("[Guard]", err.message));
     await sleep(ACCOUNT_GAP_MS);
   }

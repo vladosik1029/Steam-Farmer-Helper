@@ -130,6 +130,8 @@ function ConfirmationsFeed() {
   const withoutSecret = connected.filter((a) => !sessions[a.steamId || '']?.canConfirm);
   const offline = accounts.filter((a) => a.steamId && !sessions[a.steamId]?.loggedIn);
   const errors = guard.filter((a) => a.error);
+  const pausedUntil = Math.max(0, ...guard.map((a) => a.rateLimitedUntil || 0));
+  const pausedCount = guard.filter((a) => a.rateLimitedUntil).length;
   const safeSelectable = visible.filter((c) => !c.danger);
 
   return (
@@ -167,6 +169,17 @@ function ConfirmationsFeed() {
 
       {busy && <div className="mb-4 chip bg-accent/15 text-accent"><RefreshCw size={12} className="animate-spin" /> {busy}</div>}
       {error && <pre className="p-3 mb-4 rounded-xl bg-bad/10 border border-bad/30 text-bad text-sm whitespace-pre-wrap font-sans">{error}</pre>}
+
+      {pausedUntil > Date.now() && (
+        <div className="card-inset p-3 mb-4 text-sm text-warn flex gap-2 border-warn/40">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+          <div>
+            Steam временно ограничил запросы с вашего IP (ошибка 429), затронуто аккаунтов: {pausedCount}.
+            Проверка возобновится сама примерно в {new Date(pausedUntil).toLocaleTimeString().slice(0, 5)}.
+            <span className="text-muted"> Так бывает, когда много аккаунтов работают с одного IP: помогают прокси на аккаунтах (Настройки → Прокси).</span>
+          </div>
+        </div>
+      )}
 
       {(offline.length > 0 || withoutSecret.length > 0 || errors.length > 0) && (
         <div className="card-inset p-3 mb-4 text-xs text-muted space-y-1">

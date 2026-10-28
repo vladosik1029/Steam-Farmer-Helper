@@ -7,6 +7,7 @@ import { HttpError } from "./security.ts";
 import { getProxyAgent, proxyOptions, axiosProxy } from "./proxy.ts";
 import { logEvent } from "./events.ts";
 import { authCode, confirmationKey } from "./time.ts";
+import { community } from "./community.ts";
 
 export type SteamSession = {
   uid: string;
@@ -272,10 +273,10 @@ export async function fetchSteamWallet(session: SteamSession) {
 
 // Public profile (name, avatar, VAC) + full ban info when we have an access token
 export async function fetchProfile(steamId: string, session?: SteamSession, proxy?: string) {
-  const response = await axios.get(`https://steamcommunity.com/profiles/${steamId}?xml=1`, {
+  const response = await community(proxy, () => axios.get(`https://steamcommunity.com/profiles/${steamId}?xml=1`, {
     timeout: 15000,
     ...axiosProxy(proxy)
-  });
+  }));
   const xml = String(response.data);
   const pick = (tag: string) => {
     const m = xml.match(new RegExp(`<${tag}>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?</${tag}>`, "s"));
@@ -293,11 +294,11 @@ export async function fetchProfile(steamId: string, session?: SteamSession, prox
   // GetPlayerBans needs a Web API key, so VAC/game ban counters are read from the
   // profile page's "profile_ban_status" block (shown even on private profiles)
   try {
-    const page = await axios.get(`https://steamcommunity.com/profiles/${steamId}`, {
+    const page = await community(proxy || session?.proxy, () => axios.get(`https://steamcommunity.com/profiles/${steamId}`, {
       timeout: 15000,
       headers: { Cookie: "Steam_Language=english" },
       ...axiosProxy(proxy || session?.proxy)
-    });
+    }), "low");
     const html = String(page.data);
     const num = (re: RegExp) => Number(html.match(re)?.[1] || 0);
     const multipleVac = /Multiple VAC bans on record/i.test(html);
@@ -328,32 +329,29 @@ export function fetchSteamInventory(session: SteamSession | undefined, steamId: 
 
 async function loadSteamInventory(session: SteamSession | undefined, steamId: string, appId: number, contextId: number, proxy?: string): Promise<any[]> {
   if (session && session.loggedIn) {
-    return new Promise<any[]>((resolve, reject) => {
+    return community(session.proxy, () => new Promise<any[]>((resolve, reject) => {
       // tradableOnly = false: otherwise trade-locked / non-tradable items are silently dropped
       session.community.getUserInventoryContents(steamId, appId, contextId, false, "english", (err: any, inventory: any) => {
-        if (err) return reject(new HttpError(502, err.message));
+        if (err) return reject(new HttpError(String(err.message).includes("429") ? 429 : 502, err.message));
         resolve(inventory);
       });
-    });
+    }));
   }
 
   // Anonymous fallback: Steam rate-limits this heavily, logging in is strongly preferred
-  const response = await axios.get(`https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`, {
+  const response = await community(proxy, () => axios.get(`https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
       "Accept": "application/json, text/plain, */*",
       "Referer": `https://steamcommunity.com/profiles/${steamId}/inventory/`
     },
     timeout: 30000,
-    validateStatus: () => true,
+    validateStatus: (status) => status !== 429,
     ...axiosProxy(proxy)
-  });
+  }));
 
   if (response.status === 401 || response.status === 403) {
     throw new HttpError(401, "Steam не отдаёт инвентарь без входа. Нажмите «Войти» на аккаунте.");
-  }
-  if (response.status === 429) {
-    throw new HttpError(429, "Слишком много запросов (429). Подождите 5-10 минут или войдите в аккаунт.");
   }
   if (response.status !== 200) {
     throw new HttpError(502, `Steam HTTP error ${response.status}`);
@@ -386,13 +384,12 @@ function requireIdentitySecret(session: SteamSession) {
 
 export async function listConfirmations(session: SteamSession) {
   const { time, key } = confirmationKey(requireIdentitySecret(session), "conf");
-  const confs: any[] = await promisify((cb) => session.community.getConfirmations(time, key, cb));
-  return confs;
+  return community(session.proxy, () => promisify<any[]>((cb) => session.community.getConfirmations(time, key, cb)));
 }
 
 export async function respondToConfirmation(session: SteamSession, conf: any, accept: boolean) {
   const { time, key } = confirmationKey(requireIdentitySecret(session), accept ? "allow" : "cancel");
-  await promisify((cb) => conf.respond(time, key, accept, cb));
+  await community(session.proxy, () => promisify((cb) => conf.respond(time, key, accept, cb)));
 }
 
 export function getOffer(session: SteamSession, offerId: string) {
@@ -406,7 +403,7 @@ export function getOffer(session: SteamSession, offerId: string) {
 // "Safe" = we give nothing away
 async function acceptIfSafe(session: SteamSession, offer: any) {
   if (offer.isOurOffer || offer.itemsToGive.length > 0) return false;
-  const status: string = await promisify((cb) => offer.accept(cb));
+  const status: string = await community(session.proxy, () => promisify((cb) => offer.accept(cb)));
   logEvent(session.uid, {
     level: "success",
     steamId: session.steamId,
@@ -441,40 +438,58 @@ export async function acceptSafeOffers(session: SteamSession) {
   return { active: active.length, accepted, skipped: active.length - accepted };
 }
 
+export type TransferItem = { assetid: string; amount: number };
+
 // Sends items from one connected account to another, confirms on the sender
-// and accepts on the receiver. assetIds empty = all tradable items of that app/context.
-export async function transferItems(from: SteamSession, to: SteamSession, appId: number, contextId: number, assetIds: string[]) {
+// and accepts on the receiver. No items = all tradable items of that app/context.
+// A step that fails after the offer is sent doesn't fail the transfer: the
+// Steam Guard poll confirms the app's own offers, and the offer can still be
+// accepted later.
+export async function transferItems(from: SteamSession, to: SteamSession, appId: number, contextId: number, picked: TransferItem[]) {
   if (from.steamId === to.steamId) throw new HttpError(400, "Нельзя передать предметы самому себе.");
   requireIdentitySecret(from);
 
-  const token: string = await promisify((cb) => to.manager.getOfferToken(cb));
-  const inventory: any[] = await promisify((cb) => from.manager.getInventoryContents(appId, contextId, true, cb));
-  const items = assetIds.length > 0 ? inventory.filter((i) => assetIds.includes(String(i.assetid))) : inventory;
+  const token: string = await community(to.proxy, () => promisify((cb) => to.manager.getOfferToken(cb)));
+  // Selected items are already known to the window: no extra inventory request
+  const items = picked.length > 0
+    ? picked.map((i) => ({ appid: appId, contextid: String(contextId), assetid: i.assetid, amount: i.amount }))
+    : await community(from.proxy, () => promisify<any[]>((cb) => from.manager.getInventoryContents(appId, contextId, true, cb)));
   if (items.length === 0) {
-    return { offerId: null, items: 0, status: "nothing-to-send" };
+    return { offerId: null, items: 0, status: "nothing-to-send", notes: [] as string[] };
   }
 
   const offer = from.manager.createOffer(to.steamId, token);
   offer.addMyItems(items);
   offer.setMessage("SteamFarmer: перенос предметов");
-  const status: string = await promisify((cb) => offer.send(cb));
-  from.ourOffers.set(String(offer.id), to.steamId);
+  const status: string = await community(from.proxy, () => promisify((cb) => offer.send(cb)));
+  const offerId = String(offer.id);
+  from.ourOffers.set(offerId, to.steamId);
 
+  const notes: string[] = [];
   if (status === "pending") {
-    await promisify((cb) => from.community.acceptConfirmationForObject(from.identitySecret!, offer.id, cb));
+    try {
+      const { time, key } = confirmationKey(from.identitySecret!, "conf");
+      const confs = await community(from.proxy, () => promisify<any[]>((cb) => from.community.getConfirmations(time, key, cb)));
+      const conf = confs.find((c) => String(c.creator) === offerId);
+      if (conf) await respondToConfirmation(from, conf, true);
+      else notes.push("подтверждение ещё не появилось, приложение подтвердит его само");
+    } catch (err: any) {
+      notes.push(`не подтверждён сразу (${err.message}), приложение подтвердит его само`);
+    }
   }
 
   // Receiver gives nothing, so accepting is always safe
   try {
-    const incoming: any = await promisify((cb) => to.manager.getOffer(offer.id, cb));
-    await promisify((cb) => incoming.accept(cb));
+    const incoming: any = await promisify((cb) => to.manager.getOffer(offerId, cb));
+    await community(to.proxy, () => promisify((cb) => incoming.accept(cb)));
   } catch (err: any) {
+    notes.push(`не принят на ${to.accountName} (${err.message}), примите обмен позже`);
     logEvent(to.uid, {
       level: "warning",
       steamId: to.steamId,
       accountName: to.accountName,
       type: "transfer",
-      message: `Трейд #${offer.id} отправлен, но не принят автоматически: ${err.message}`
+      message: `Трейд #${offerId} отправлен, но не принят автоматически: ${err.message}`
     });
   }
 
@@ -483,9 +498,9 @@ export async function transferItems(from: SteamSession, to: SteamSession, appId:
     steamId: from.steamId,
     accountName: from.accountName,
     type: "transfer",
-    message: `Передано ${items.length} предм. → ${to.accountName} (трейд #${offer.id})`
+    message: `Передано ${items.length} предм. → ${to.accountName} (трейд #${offerId})`
   });
-  return { offerId: String(offer.id), items: items.length, status };
+  return { offerId, items: items.length, status, notes };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,13 @@
 import axios from "axios";
+import { community, cooldownUntil, isRateLimit } from "./community.ts";
 
 // Prices are in RUB: market.csgo publishes its RUB price list, Steam is asked with currency=5.
 
 const STEAM_CURRENCY_RUB = 5;
 const CSGO_TTL_MS = 15 * 60_000;
 const STEAM_TTL_MS = 6 * 60 * 60_000;
-// priceoverview allows roughly 20 requests per minute per IP
-const STEAM_REQUEST_GAP_MS = 3500;
-const STEAM_BACKOFF_MS = 60_000;
+// priceoverview shares the per-IP limit of steamcommunity.com with confirmations
+// and trades, so it runs as low-priority traffic in the shared queue (community.ts)
 
 // ---------------------------------------------------------------------------
 // market.csgo: one request returns the whole CS2 price list
@@ -48,7 +48,6 @@ const steamPrices = new Map<string, SteamPrice>();
 const steamQueue: { appId: number; name: string }[] = [];
 const queued = new Set<string>();
 let queueRunning = false;
-let backoffUntil = 0;
 
 const steamKey = (appId: number, name: string) => `${appId}:${name}`;
 
@@ -61,16 +60,11 @@ function parseRub(value?: string): number | null {
 }
 
 async function fetchSteamPrice(appId: number, name: string) {
-  const response = await axios.get("https://steamcommunity.com/market/priceoverview/", {
+  const response = await community(undefined, () => axios.get("https://steamcommunity.com/market/priceoverview/", {
     params: { appid: appId, currency: STEAM_CURRENCY_RUB, market_hash_name: name },
     timeout: 15000,
-    validateStatus: () => true
-  });
-  if (response.status === 429) {
-    backoffUntil = Date.now() + STEAM_BACKOFF_MS;
-    console.warn(`[Prices] Steam priceoverview rate limited, pausing ${STEAM_BACKOFF_MS / 1000}s`);
-    throw new Error("rate limited");
-  }
+    validateStatus: (status) => status !== 429
+  }), "low");
   const data = response.data || {};
   steamPrices.set(steamKey(appId, name), {
     lowest: parseRub(data.lowest_price),
@@ -85,15 +79,13 @@ async function runSteamQueue() {
   queueRunning = true;
   try {
     while (steamQueue.length > 0) {
-      const wait = Math.max(0, backoffUntil - Date.now());
-      await new Promise((r) => setTimeout(r, wait + STEAM_REQUEST_GAP_MS));
       const next = steamQueue[0];
       try {
         await fetchSteamPrice(next.appId, next.name);
         steamQueue.shift();
         queued.delete(steamKey(next.appId, next.name));
       } catch (err: any) {
-        if (err.message !== "rate limited") {
+        if (!isRateLimit(err)) {
           // Unknown/unmarketable item: remember "no price" so it isn't retried every time
           steamPrices.set(steamKey(next.appId, next.name), { lowest: null, median: null, volume: 0, at: Date.now() });
           steamQueue.shift();
@@ -136,7 +128,7 @@ export async function getPrices(items: { appId: number; name: string }[]) {
     csgo,
     pending,
     queueLength: steamQueue.length,
-    rateLimitedUntil: backoffUntil > Date.now() ? backoffUntil : null,
+    rateLimitedUntil: cooldownUntil(),
     csgoUpdatedAt: csgoFetchedAt || null
   };
 }

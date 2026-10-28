@@ -152,7 +152,12 @@ const api: Record<string, Handler> = {
     const to = requireSession(uid, requireSteamId(body.toSteamId));
     const appId = Number(body.appId) || 730;
     const contextId = Number(body.contextId) || (appId === 753 ? 6 : 2);
-    return transferItems(from, to, appId, contextId, requireIdList(body.assetIds, 500));
+    // `items` carries amounts for stacks; plain `assetIds` (or none = everything) still works
+    const picked = Array.isArray(body.items)
+      ? body.items.slice(0, 500).map((i: any) => ({ assetid: String(i?.assetid), amount: Math.max(1, Math.floor(Number(i?.amount) || 1)) }))
+          .filter((i: any) => /^\d{1,20}$/.test(i.assetid))
+      : requireIdList(body.assetIds, 500).map((assetid) => ({ assetid, amount: 1 }));
+    return transferItems(from, to, appId, contextId, picked);
   },
 
   // ---------------------------------------------------------------- steam guard
